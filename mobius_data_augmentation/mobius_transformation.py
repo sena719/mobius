@@ -39,19 +39,22 @@ class Mobius(object):
     def __init__(self,rand,interpolation,dataset, std, madmissable,M):
         if dataset == 'cifar10' or dataset ==  'cifar100':
             self.h = 32
-            self.w = 32            
-        elif dataset == 'imagenet':                
+            self.w = 32
+        elif dataset == 'imagenet':
             self.h = 32
             self.w = 32
-        elif dataset == 'tiny':                
+        elif dataset == 'tiny':
             self.h = 64
             self.w = 64
-        elif dataset == 'stl10':                
+        elif dataset == 'stl10':
             self.h = 96
-            self.w = 96 
-        elif dataset == 'pet':                
+            self.w = 96
+        elif dataset == 'pet':
             self.h = 224
-            self.w = 224    
+            self.w = 224
+        elif dataset == 'kmnist':
+            self.h = 28
+            self.w = 28
         self.mode='constant'
         e=[complex(0,0)]*self.h*self.w
         self.z=np.array(e).reshape(self.h,self.w)

@@ -30,7 +30,7 @@ from model.wide_resnet import WideResNet
 
 
 model_options = ['resnet18', 'wideresnet','resnet50','wideresnet2816','densenet121','resnext50']
-dataset_options = ['cifar10', 'cifar100', 'tiny','imagenet','stl10','oxfordpet','pet']
+dataset_options = ['cifar10', 'cifar100', 'tiny','imagenet','stl10','oxfordpet','pet','kmnist']
 
 parser = argparse.ArgumentParser(description='CNN')
 parser.add_argument('--dataset', '-d', default='cifar100',
@@ -90,6 +90,10 @@ parser.add_argument('--madmissable', action='store_true', default=False,
                     help='if to use madmissable')
 parser.add_argument('--M', type=float, default=3,
                     help='M for madmissable')
+parser.add_argument('--data_path', type=str, default='data/',
+                    help='path to dataset root directory')
+parser.add_argument('--patience', type=int, default=20,
+                    help='early stopping patience in epochs (default: 20, 0 to disable)')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 cudnn.benchmark = True  # Should make training should go faster for large models
@@ -150,14 +154,23 @@ elif args.dataset == 'stl10':
     normalize])
 
 elif args.dataset == 'pet':
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     train_transform = super_transformation(args.rand,args.interpolation, args.data_augmentation, normalize ,'pet' , args.n_holes, args.length, ifcutout=args.cutout,ifmask =args.mask,mask_length=args.mask_length, std =  args.std,madmissable=args.madmissable, M=args.M)
     test_transform = transforms.Compose([
     transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
-    normalize])   
+    normalize])
+
+elif args.dataset == 'kmnist':
+    normalize = transforms.Normalize(mean=[0.1904, 0.1904, 0.1904],
+                                     std=[0.3475, 0.3475, 0.3475])
+    train_transform = super_transformation(args.rand,args.interpolation, args.data_augmentation, normalize ,'kmnist' , args.n_holes, args.length, ifcutout=args.cutout,ifmask =args.mask,mask_length=args.mask_length, std =  args.std,madmissable=args.madmissable, M=args.M)
+    test_transform = transforms.Compose([
+    transforms.Grayscale(num_output_channels=3),
+    transforms.ToTensor(),
+    normalize])
     
 # for unlabeled data points
 train_transform2 = transforms.Compose([])
@@ -223,15 +236,28 @@ elif args.dataset == 'stl10':
                                     download=True)
 elif args.dataset == 'pet':
     num_classes = 37
-    
+
     traindir = 'oxfordpet/data_breeds/train'
     valdir = 'oxfordpet/data_breeds/test'
-    
+
     train_dataset1 = datasets.ImageFolder(traindir,
                                   transform=train_transform)
-    
+
     test_dataset = datasets.ImageFolder(valdir,
                                      transform=test_transform)
+
+elif args.dataset == 'kmnist':
+    num_classes = 10
+
+    train_dataset1 = datasets.KMNIST(root=args.data_path,
+                                     train=True,
+                                     transform=train_transform,
+                                     download=False)
+
+    test_dataset = datasets.KMNIST(root=args.data_path,
+                                   train=False,
+                                   transform=test_transform,
+                                   download=False)
 
 
 ## use less data to train
@@ -301,31 +327,34 @@ csv_logger = CSVLogger(args=args, fieldnames=['epoch', 'train_acc', 'test_acc'],
 
 
 def test(loader):
-    cnn.eval() 
+    cnn.eval()
     correct = 0.
     total = 0.
 
     frames = []
+    has_imgs = hasattr(loader.dataset, 'imgs')
     progress_bar_test = tqdm(loader)
     for i, (images, labels) in enumerate(progress_bar_test):
         images = images.cuda()
         labels = labels.cuda()
-    
+
         with torch.no_grad():
             pred = cnn(images)
 
         pred = torch.max(pred.data, 1)[1]
         total += labels.size(0)
         correct += (pred == labels).sum().item()
-        
-        correctness = pred.data == labels.data
-        batch_size = len(labels)
-        img_paths = loader.dataset.imgs[i:i+batch_size]
-        df = pd.DataFrame(img_paths, columns=['path', 'label'])
-        df['pred'] = pred.cpu().detach().numpy()
-        df['correctness'] = correctness.cpu().detach().numpy()
-        frames.append(df)
-    df_merged = pd.concat(frames)
+
+        if has_imgs:
+            correctness = pred.data == labels.data
+            batch_size = len(labels)
+            img_paths = loader.dataset.imgs[i:i+batch_size]
+            df = pd.DataFrame(img_paths, columns=['path', 'label'])
+            df['pred'] = pred.cpu().detach().numpy()
+            df['correctness'] = correctness.cpu().detach().numpy()
+            frames.append(df)
+
+    df_merged = pd.concat(frames) if frames else pd.DataFrame()
 
     val_acc = correct / total
     cnn.train()
@@ -334,6 +363,7 @@ def test(loader):
 best_acc = 0
 best_epoch = -1
 best_model = None
+patience_counter = 0
 for epoch in range(args.epochs):
     np.random.seed(epoch)
     xentropy_loss_avg = 0.
@@ -366,7 +396,7 @@ for epoch in range(args.epochs):
             xentropy='%.3f' % (xentropy_loss_avg / (i + 1)),
             acc='%.3f' % accuracy)
 
-    scheduler.step(epoch)
+    scheduler.step()
 
     test_acc, df_preds = test(test_loader)
     tqdm.write('test_acc: %.3f' % (test_acc))
@@ -374,9 +404,9 @@ for epoch in range(args.epochs):
     csv_logger.writerow(row)
     
     if test_acc > best_acc:
-        
         best_acc = test_acc
         best_epoch = epoch
+        patience_counter = 0
         if test_acc > 0.1:
             best_model = copy.deepcopy(cnn)
 
@@ -385,6 +415,12 @@ for epoch in range(args.epochs):
         preds_dir = 'preds/'+test_id
         os.makedirs(preds_dir, exist_ok=True)
         df_preds.to_csv(f'{preds_dir}/predictions_test_epoch{epoch}_acc{best_acc}.csv')
+    else:
+        patience_counter += 1
+        tqdm.write(f'No improvement: {patience_counter}/{args.patience}')
+        if args.patience > 0 and patience_counter >= args.patience:
+            tqdm.write(f'Early stopping at epoch {epoch}')
+            break
             
 print ("Best test acc:", str(best_acc) )
 print("Best Epoch:", str(best_epoch))            

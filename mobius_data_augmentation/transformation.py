@@ -17,19 +17,22 @@ class super_transformation(object):
         
         if dataset == 'cifar10' or  dataset == 'cifar100' or dataset == 'svhn':
             self.h = 32
-            self.w = 32            
-        elif dataset == 'imagenet':                
+            self.w = 32
+        elif dataset == 'imagenet':
             self.h = 32
             self.w = 32
-        elif dataset == 'tiny':                
+        elif dataset == 'tiny':
             self.h = 64
             self.w = 64
-        elif dataset == 'stl10':                
+        elif dataset == 'stl10':
             self.h = 96
             self.w = 96
-        elif dataset == 'pet':                
+        elif dataset == 'pet':
             self.h = 224
             self.w = 224
+        elif dataset == 'kmnist':
+            self.h = 28
+            self.w = 28
         self.augmentation_type = augmentation_type
         self.mobius = Mobius(rand,interpolation,dataset,std, madmissable,M)
         self.mobius_mask = Mobius_mask(dataset,mask_length=mask_length)
@@ -40,22 +43,26 @@ class super_transformation(object):
         self.resize = transforms.Resize((self.h,self.w))
         if dataset == 'cifar10' or dataset =='cifar100' or dataset == 'svhn':
             self.crop = transforms.RandomCrop(32, padding=4)
-        elif dataset == 'imagenet':                
-#             self.crop = transforms.RandomResizedCrop((224,224))
+        elif dataset == 'imagenet':
             self.crop = transforms.RandomCrop(32, padding=4)
         elif dataset == 'tiny' :
-            self.crop = transforms.RandomCrop(64, padding=4) 
+            self.crop = transforms.RandomCrop(64, padding=4)
         elif dataset == 'stl10' :
-            self.crop = transforms.RandomCrop(96, padding=12)   
+            self.crop = transforms.RandomCrop(96, padding=12)
         elif dataset == 'pet' :
             self.crop = transforms.CenterCrop(224)
             self.resize = transforms.Compose([
                         transforms.Resize(256),
                         transforms.CenterCrop(224)])
+        elif dataset == 'kmnist':
+            self.crop = transforms.RandomCrop(28, padding=4)
+        self.grayscale_to_rgb = (dataset == 'kmnist')
             
         self.ifcutout = ifcutout
         self.ifmask = ifmask
     def __call__(self, image):
+        if self.grayscale_to_rgb:
+            image = image.convert('RGB')
         if self.augmentation_type == 'noaug':
             # noaug
             image = self.crop(image)
@@ -324,5 +331,5 @@ class super_transformation(object):
         if ifmask == False:
             return image
         else:
-            image == self.mobius_mask(image)
+            image = self.mobius_mask(image)
             return image
